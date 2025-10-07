@@ -1,0 +1,169 @@
+name: xlstm
+state: training 
+epochs: 200
+lr: 3.0e-5
+batchsize: 8
+datasets_path: datasets\pusht\pusht_cchi_v7_replay.zarr
+results_path: results
+data_format: joints # joints/rpy
+is_init_param: True
+is_resume: False
+checkpoint_path: D:\action_generation\results\25-06-12-11-01-16
+past_img_num: 5
+future_img_num: 5
+cropWidth: 96
+cropHeight: 96
+z_dim: 128
+z_attention: False 
+random_seed: -1  # -1 为随机/3401678761
+valid_datas_scale: 0.2
+per_image_with_signal_num: 2  # 一张图对应几个信号点
+max_history: 1 # 只有2能用，2以上没改好
+save_rate: 1.0  #  action save rate
+images_save_rate: 0.2
+per_episode_to_batch_num: 1
+enc_out_dim: 120
+both_camera_concat_over: w_channel # 两个相机分开处理了，但是代码没改过来，暂时用着这个条件[b, s, c, h, w] --> c_channel / w_channel / s_channel
+is_use_cdna: True
+# ablation
+is_use_three_phase_train: False   
+is_diff_generate_act: False
+olny_action_generate: True  
+is_only_transformer: False   
+is_use_snn_residual: False  
+is_use_prob_loss: True
+is_use_mam: False
+visual_encoder: xlstm # diffusion/xlstm   
+act_encoder: transformerxlstm # transformerxlstm/diffusion/xlstm/causalconv
+# removal images generate part
+alpha_loss:
+    pos: 0.5
+    vel: 0.3
+    eff: 0.2 
+    kl: 1.0
+    actions: 2500.0
+    frames: 1.0
+    sucker: 500.0
+    gdl: 0.001
+
+critic:
+    num_heads: 4
+
+transformer:
+    num_layers: 6
+    num_heads: 6
+
+snn:
+    is_use: False    
+    T: 5
+    is_use_spike_dataset: False
+    is_sampling: False   # is sampling to generate actions
+    snn_dnc: 
+        mlstm_block:
+            mlstm:
+                conv1d_kernel_size: 2
+                qkv_proj_blocksize: 2
+                num_heads: 3
+        context_length: 16
+        num_blocks: 4   # num_layers
+        embedding_dim: 70    # layer_norm_in_size, 
+        slstm_at: [] #[1] # for [] it also works, so if no sLSTM is in the stack
+        conv_kernel: 5
+        conv_stride: 2
+        conv_padding: 1
+        conv_dilation: 1
+        conv_bias: True 
+        conv_dim: 1d
+        past_img_num: 5
+
+model:  # visual model
+    mlstm_block:
+        mlstm:
+            conv1d_kernel_size: 4
+            qkv_proj_blocksize: 4
+            num_heads: 2
+    slstm_block: {}
+        # 暂时不需要slstm
+        # slstm:
+        #     backend: 'cuda' # {'cuda' if torch.cuda.is_available() else 'vanilla'} #! only vanilla here works
+        #     num_heads: 4
+        #     conv1d_kernel_size: 4
+        #     bias_init: powerlaw_blockdependent
+        # feedforward:
+        #     proj_factor: 1.3
+        #     act_fn: gelu
+    context_length: 60
+    num_blocks: 4  # num_layers
+    embedding_dim: 60    # layer_norm_in_size, 
+    slstm_at: [] #[1] # for [] it also works, so if no sLSTM is in the stack
+    conv_kernel: 5
+    conv_stride: 3
+    conv_padding: 1
+    conv_dilation: 1
+    conv_bias: True 
+    conv_dim: 3d
+    past_img_num: 5
+
+act_model_dnc: 
+    mlstm_block:
+        mlstm:
+            conv1d_kernel_size: 2
+            qkv_proj_blocksize: 2
+            num_heads: 3
+    context_length: 60
+    num_blocks: 2   # num_layers
+    embedding_dim: 60    # layer_norm_in_size, 
+    slstm_at: [] #[1] # for [] it also works, so if no sLSTM is in the stack
+    conv_kernel: 5
+    conv_stride: 2
+    conv_padding: 1
+    conv_dilation: 1
+    conv_bias: True 
+    conv_dim: 1d
+    past_img_num: 5 
+
+act_model_enc: 
+    mlstm_block:
+        mlstm:
+            conv1d_kernel_size: 2
+            qkv_proj_blocksize: 2
+            num_heads: 3
+    context_length: 60
+    num_blocks: 4  # num_layers
+    embedding_dim: 60    # layer_norm_in_size, 
+    slstm_at: [] #[1] # for [] it also works, so if no sLSTM is in the stack
+    conv_kernel: 5
+    conv_stride: 3
+    conv_padding: 1
+    conv_dilation: 1
+    conv_bias: True
+    conv_dim: 1d
+    past_img_num: 5
+
+
+task:
+  dataset:
+    # _target_: diffusion_policy.dataset.pusht_image_dataset.PushTImageDataset
+    horizon: 10
+    max_train_episodes: 90
+    pad_after: 7
+    pad_before: 1
+    seed: 42
+    val_ratio: 0.2
+    zarr_path: datasets/pusht/pusht_cchi_v7_replay.zarr
+
+dataloader:
+  batch_size: 8
+  num_workers: 0
+  persistent_workers: false
+  pin_memory: False
+  shuffle: False
+val_dataloader:
+  batch_size: 8
+  num_workers: 0
+  persistent_workers: false
+  pin_memory: true
+  shuffle: false
+
+envs:
+    mode: series    # single_step/series

@@ -1,0 +1,201 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.distributions as D
+from misc import VariableContainer, norm_to_rgb, AverageMeter
+from torch.utils.tensorboard import SummaryWriter
+import cv2 as cv
+import numpy as np
+import scipy.stats
+from torch.distributions import Normal, kl
+
+class ComputeLosses(nn.Module):
+    
+    '''
+    forward method:
+    input: 
+    pred_act: Tensor
+    pred_sucker: Tensor
+    pred_frames: Tensor
+    labels: list[Tensor, ...]  --> [sucker_labels, joints_pos_labels, obsper_frame_labels, side_frame_labels]
+    
+    return:
+    losses: 
+    '''
+    def __init__(self, device, config, act_loss='mse'):
+        super(ComputeLosses, self).__init__()
+        self.config = config
+        self.device = device
+        self.act_loss = act_loss
+        self.gdl_loss = GradientDifferenceLoss()
+        self.mse_loss = nn.MSELoss()
+        self.cross_entropy = nn.CrossEntropyLoss(   )
+        self.l1_loss = nn.L1Loss()
+        self.p_dist = Normal(torch.zeros([config.batchsize, config.past_img_num*config.per_image_with_signal_num, 2], device=device), torch.ones([config.past_img_num*config.per_image_with_signal_num, 2], device=device))
+        
+
+    def forward(self, pred_results:VariableContainer, batch:list, writer:SummaryWriter, epoch:int, avg_:AverageMeter, phase:str=None):
+        loss_results = VariableContainer()
+        action_label = batch['action']
+        obs_seqlen = batch['obs']['image'].shape[1]
+        obs_label = batch['obs']['image'][:, obs_seqlen//2:, ...]
+        if self.config.is_use_prob_loss:
+            actions_loss = - pred_results.act_log_prob.sum(dim=(-1, -2)).mean()
+            q_dist = Normal(pred_results.act_mu, pred_results.act_std)
+            act_kl = kl.kl_divergence(q_dist, self.p_dist).sum(dim=[1, 2]).mean()
+            
+        else:
+            if self.act_loss == 'l4':
+                actions_loss = self.l4_norm(pred_results.actions, action_label)
+            else:
+                actions_loss = self.mse_loss(pred_results.actions, action_label)
+        if not self.config.olny_action_generate:
+            obs_frames_loss, loss_results.obs_upsample_frame_pred = self.realEPE(pred_results.obs_future_seq, obs_label) 
+        else:
+            obs_frames_loss = torch.tensor([0], dtype=torch.float32, device=self.device)
+            side_frames_loss = torch.tensor([0], dtype=torch.float32, device=self.device)
+            loss_results.obs_upsample_frame_pred = None
+            loss_results.side_upsample_frame_pred = None            
+        # gdl_loss = self.gdl_loss(pred_results.future_seq, future_labels)
+        if phase == 'inference':
+            phase_alpha_kl = 0.0
+        elif phase == 'add_kl':
+            phase_alpha_kl = (epoch + 1 - self.config.epochs * 0.5) / (self.config.epochs * 0.25)
+        else:
+            phase_alpha_kl = 1.0
+            
+        image_kl = torch.mean(self.kl_normal(pred_results.mu, pred_results.var))
+
+        # active inference
+        state_loss_ratio = F.sigmoid(actions_loss + obs_frames_loss)
+        new_action = (state_loss_ratio * pred_results.weights + 1.) \
+                    * pred_results.actions                          \
+                    + pred_results.bias
+        loss_results.new_actions = new_action
+        critic_loss = self.mse_loss(new_action, action_label)
+        # total loss
+        loss_results.losses = (actions_loss * self.config.alpha_loss.actions
+                    + critic_loss * self.config.alpha_loss.actions
+                    + obs_frames_loss * self.config.alpha_loss.frames
+                    + image_kl * self.config.alpha_loss.kl * phase_alpha_kl
+                    + act_kl * self.config.alpha_loss.kl * phase_alpha_kl
+            ).requires_grad_(True)
+        
+        avg_.actions_loss.update(actions_loss.item())
+        avg_.new_actions_loss.update(critic_loss.item())
+        avg_.grip_frames_loss.update(obs_frames_loss.item())
+        avg_.image_kl_loss.update(image_kl.item())
+        avg_.act_kl_loss.update(act_kl.item())
+        # avg_.gdl_loss.update(gdl_loss.item())
+        return loss_results
+
+
+
+    def EPE(self, input_flow, target_flow, device, sparse=False, mean=True):
+        # torch.cuda.init()
+
+        EPE_map = torch.norm(target_flow.cpu() - input_flow.cpu(), 2, (1, 2, 3, 4)) # 2: [8, 8, 112, 112]
+        batch_size = EPE_map.size(0)
+        if sparse:
+            # invalid flow is defined with both flow coordinates to be exactly 0
+            #target_flow[:, 0] == 0判断x方向上为0的像素点target_flow[:, 1]同理 
+            #两个都为0时，标记为1
+            mask = (target_flow[:, 0] == 0) & (target_flow[:, 1] == 0)
+            EPE_map = EPE_map[~mask.data]
+        if mean:
+            epe_map_result = EPE_map.mean().cuda()
+            return epe_map_result
+        else:
+            return (EPE_map.sum() / batch_size).cuda()
+
+
+    def realEPE(self, output, target, device='cuda', sparse=False):
+        b, d, n, h, w = target.size()
+
+        # upsampled_output = nn.functional.upsample(output, size=(h, w), mode="bilinear")
+        if output.shape == target.shape:
+            upsampled_output = output
+        else:
+            upsampled_output = nn.functional.interpolate(output, size=(n, h, w), mode="trilinear", align_corners=False)
+        return self.EPE(upsampled_output, target, device, sparse, mean=True), upsampled_output
+
+
+    def kl_normal(self, qm, qv):
+        # normal gausian 
+        # pm = torch.nn.Parameter(
+        #     torch.zeros(self.xlstm_cfg.batchsize, self.xlstm_cfg.z_dim))
+        # pv = torch.nn.Parameter(
+        #     torch.ones(self.xlstm_cfg.batchsize, self.xlstm_cfg.z_dim))
+        
+        pm = torch.zeros_like(qm)
+        pv = torch.ones_like(qv)
+        
+        element_wise = 0.5 * (
+            torch.log(pv) - torch.log(qv) + qv / pv + (qm - pm).pow(2) / pv - 1
+        )
+        kl = torch.sum(element_wise, dim=-1)
+        return kl
+
+
+
+    def correlation_loss(self, img_encoded, tactile_encoded, flex_encoded=None, is_mean=True):
+        mean_img = torch.mean(img_encoded, dim=-1)
+        mean_tactile = torch.mean(tactile_encoded, dim=-1)
+        if flex_encoded != None:
+            mean_flex = torch.mean(flex_encoded, dim=-1)
+        corr_img_tactile = torch.div(
+            torch.sum(
+                torch.mul(torch.sub(img_encoded, mean_img.unsqueeze(-1)), torch.sub(tactile_encoded, mean_tactile.unsqueeze(-1))), dim=-1
+            ),
+            torch.sqrt(
+                torch.mul(torch.sum(torch.pow(torch.sub(img_encoded, mean_img.unsqueeze(-1)), 2) , -1), torch.sum(torch.pow(torch.sub(tactile_encoded, mean_tactile.unsqueeze(-1)), 2) , -1))
+            )
+        )
+        if is_mean:
+            corr_result =  torch.mean(corr_img_tactile)
+        else:
+            corr_result = torch.sum(corr_img_tactile, dim=-1)
+        
+        return corr_result
+    
+    def l4_norm(self, input:torch.Tensor, target:torch.Tensor):
+        return torch.norm(input.cpu() - target.cpu(), 2, (1, 2)).sum().mean()
+    
+    def kl_dist(self, predict:torch.Tensor, target:torch.Tensor, epsilon=1e-5):
+        predict_nonneg = (predict + 100.0) / 200.0 # [-1,1] -> [0,1]
+        target_nonneg = (target + 100.0) / 200.0
+        qx = (predict_nonneg) / (torch.sum(predict_nonneg) + epsilon * predict.size(-1))
+        py = (target_nonneg) / (torch.sum(target_nonneg) + epsilon * target.size(-1))
+    
+        kl_ = torch.sum(py * torch.log(py / qx + epsilon))
+        return kl_
+
+    def state_mse(self, predict_results, labels):
+        sucker, action, obsper, side, _ = labels
+        seq_len = sucker.shape(-1)
+        for i in range(0, seq_len, self.config.per_image_with_signal_num):
+            if self.config.olny_action_generate:
+                predict_results.pred_state
+    
+    
+class GradientDifferenceLoss(nn.Module):
+    def __init__(self):
+        super(GradientDifferenceLoss, self).__init__()
+
+    def forward(self, input_image, target_image):
+        if input_image.shape != target_image.shape:
+            b, s, c, h, w = target_image.shape
+            input_image = nn.functional.interpolate(input_image, size=(c, h, w), mode="trilinear", align_corners=False)
+        
+        # Calculate gradients for both input and target images
+        input_gradients_x = torch.abs(input_image[:, :, :, :, :-1] - input_image[:, :, :, :, 1:])
+        input_gradients_y = torch.abs(input_image[:, :, :, :-1, :] - input_image[:, :, :, 1:, :])
+
+        target_gradients_x = torch.abs(target_image[:, :, :, :, :-1] - target_image[:, :, :, :, 1:])
+        target_gradients_y = torch.abs(target_image[:, :, :, :-1, :] - target_image[:, :, :, 1:, :])
+
+        # Calculate the gradient difference loss
+        gdl_loss = torch.sum(torch.sum(torch.abs(input_gradients_x - target_gradients_x), dim=(1, 2, 3, 4)) +
+                             torch.sum(torch.abs(input_gradients_y - target_gradients_y), dim=(1, 2, 3, 4)))
+
+        return gdl_loss
