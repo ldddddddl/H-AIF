@@ -9,7 +9,7 @@ results_path: results/
 data_format: joints # joints/rpy
 is_init_param: False
 is_resume: True
-checkpoint_path: D:\action_generation\results\25-05-28-16-10-42--mark --results\check_point\model_25-05-28-16-10-42.pth.tar
+checkpoint_path: .\results\25-05-28-16-10-42--mark --results\check_point\model_25-05-28-16-10-42.pth.tar
 past_img_num: 5
 future_img_num: 5
 cropWidth: 112

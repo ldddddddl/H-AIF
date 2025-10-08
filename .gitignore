@@ -1,3 +1,16 @@
+# Project
+
+datasets/
+.vscode/
+diffusion_policy/
+results/
+wandb/
+xlstm-main/
+logs/
+*gitignore*
+artifacts/
+runs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

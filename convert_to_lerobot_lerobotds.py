@@ -15,6 +15,10 @@ try:
 except Exception:
     DECORD_AVAILABLE = False
 
+TASK = {
+    'v3': 'Put the block in another random position.',
+    'v4': 'Pull the box closer and put the block into the box.'
+}
 
 def normalize_sheet_name(name: str) -> str:
     n = name.strip().lower()
@@ -139,6 +143,26 @@ def read_video_frames(video_path: str, max_frames: Optional[int] = None) -> List
     return frames
 
 
+def get_video_len_fps(video_path: str) -> Tuple[int, float]:
+    if DECORD_AVAILABLE:
+        vr = VideoReader(video_path)
+        n = len(vr)
+        try:
+            fps = float(vr.get_avg_fps())
+        except Exception:
+            fps = 30.0
+        return n, fps
+    else:
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise RuntimeError(f"无法打开视频: {video_path}")
+        n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+        cap.release()
+        return n, fps
+
+
 def infer_video_paths(files: List[str]) -> Tuple[Optional[str], Optional[str]]:
     vids = [f for f in files if f.lower().endswith((".mp4", ".avi", ".mov", ".mkv"))]
     gripper = None
@@ -201,15 +225,19 @@ def analyze_episode(episode_dir: str) -> Dict[str, int]:
 
 def main():
     parser = argparse.ArgumentParser(description="Convert to LeRobotDataset format and optional push to hub.")
-    parser.add_argument("--input_root", type=str, default=r"./datasets/v4", help="原始数据根目录。每个子目录为一个 episode")
-    parser.add_argument("--output_root", type=str, default=r"./datasets/v4_lerobot_lerobotds", help="输出数据根目录")
+    parser.add_argument("--input_root", type=str, default=r"./datasets/v3", help="原始数据根目录。每个子目录为一个 episode")
+    parser.add_argument("--output_root", type=str, default=r"./datasets/v3_lerobot", help="输出数据根目录")
     parser.add_argument("--image_size", type=int, default=256, help="输出图像边长，CHW = (3, S, S)")
     parser.add_argument("--overwrite", action="store_true",default=True, help="若输出目录存在则清空")
     parser.add_argument("--push_to_hub", action="store_true", default=False, help="是否推送到 Hugging Face Hub")
     parser.add_argument("--repo_id", type=str, default=None, help="Hugging Face repo_id，例如 username/dataset_name")
     parser.add_argument("--private", action="store_true", help="创建私有数据集仓库")
+    parser.add_argument("--store_video_refs", action="store_true", default=True, help="以视频路径+帧索引形式保存，而不是每帧图像")
+    parser.add_argument("--target_fps", type=int, default=30, help="目标帧率（下采样至该帧率），仅影响样本间隔")
+    parser.add_argument("--no_prompt", action="store_true", help="不在每帧重复保存提示文本以减小体积")
     args = parser.parse_args()
-
+    
+    task_name = TASK[args.input_root.split('/')[-1]]
     # 延迟导入以避免环境缺失时报错
     try:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -238,33 +266,65 @@ def main():
     has_suck = info["has_suck"]
 
     # 创建数据集（参考 conver_example.py 的写入方式）
-    features: Dict[str, Dict] = {
-        "top_image": {
-            "dtype": "image",
-            "shape": (3, args.image_size, args.image_size),
-            "names": ["channel", "height", "width"],
-        },
-        "wrist_image": {
-            "dtype": "image",
-            "shape": (3, args.image_size, args.image_size),
-            "names": ["channel", "height", "width"],
-        },
-        "state": {
-            "dtype": "float32",
-            "shape": (num_joints,),
-            "names": ["state"],
-        },
-        "action": {
-            "dtype": "float32",
-            "shape": (num_joints,),
-            "names": ["action"],
-        }, 
-        "prompt": {
+    if args.store_video_refs:
+        features: Dict[str, Dict] = {
+            # 用路径+索引引用视频帧，避免展开每帧图像
+            "top_video_path": {
                 "dtype": "string",
                 "shape": (1,),
-                "names": ["instruction"],
-        },
-    }
+            },
+            "top_frame_idx": {
+                "dtype": "int32",
+                "shape": (1,),
+            },
+            "wrist_video_path": {
+                "dtype": "string",
+                "shape": (1,),
+            },
+            "wrist_frame_idx": {
+                "dtype": "int32",
+                "shape": (1,),
+            },
+            "state": {
+                "dtype": "float32",
+                "shape": (num_joints,),
+                "names": ["state"],
+            },
+            "action": {
+                "dtype": "float32",
+                "shape": (num_joints,),
+                "names": ["action"],
+            },
+        }
+    else:
+        features: Dict[str, Dict] = {
+            "top_image": {
+                "dtype": "image",
+                "shape": (3, args.image_size, args.image_size),
+                "names": ["channel", "height", "width"],
+            },
+            "wrist_image": {
+                "dtype": "image",
+                "shape": (3, args.image_size, args.image_size),
+                "names": ["channel", "height", "width"],
+            },
+            "state": {
+                "dtype": "float32",
+                "shape": (num_joints,),
+                "names": ["state"],
+            },
+            "action": {
+                "dtype": "float32",
+                "shape": (num_joints,),
+                "names": ["action"],
+            },
+        }
+    if not args.no_prompt:
+        features["prompt"] = {
+            "dtype": "string",
+            "shape": (1,),
+            "names": ["instruction"],
+        }
     if has_vel:
         features["velocities"] = {
             "dtype": "float32",
@@ -287,7 +347,7 @@ def main():
     dataset = LeRobotDataset.create(
         repo_id=args.repo_id,
         root=output_root,
-        fps=15,
+        fps=args.target_fps,
         features=features,
         image_writer_threads=8,
         image_writer_processes=8,
@@ -317,9 +377,20 @@ def main():
         v_gripper = os.path.join(ep_dir, v_gripper_name)
         v_side = os.path.join(ep_dir, v_side_name)
 
-        frames_gripper = read_video_frames(v_gripper)
-        frames_side = read_video_frames(v_side)
-        num_frames = min(len(frames_gripper), len(frames_side))
+        # 若保存为视频引用，避免解码所有帧，仅查询长度与 fps
+        if args.store_video_refs:
+            n_g, fps_g = get_video_len_fps(v_gripper)
+            n_s, fps_s = get_video_len_fps(v_side)
+            num_frames = min(n_g, n_s)
+            # 计算步长以匹配目标 fps（约等于）
+            stride_g = max(1, int(round((fps_g or args.target_fps) / args.target_fps)))
+            stride_s = max(1, int(round((fps_s or args.target_fps) / args.target_fps)))
+            stride = max(1, min(stride_g, stride_s))
+        else:
+            frames_gripper = read_video_frames(v_gripper)
+            frames_side = read_video_frames(v_side)
+            num_frames = min(len(frames_gripper), len(frames_side))
+            stride = 1
         if num_frames < 2:
             print(f"[跳过] 帧数不足 2：{ep_dir}")
             continue
@@ -351,37 +422,68 @@ def main():
             suck_data_bin = suck_data[:1, :] if suck_data.ndim == 2 else suck_data.reshape(1, -1)
             suck_aligned = interpolate_channels(suck_t, suck_data_bin, t_video, is_discrete=True)[0]
 
-        # 写入帧：状态用 t，动作用 t+1
-        for i in range(num_frames - 1):
-            g_img = frames_gripper[i]
-            s_img = frames_side[i]
-            g_chw = hwc_to_chw_uint8(g_img)
-            s_chw = hwc_to_chw_uint8(s_img)
-            if g_chw.shape[1] != args.image_size or g_chw.shape[2] != args.image_size:
-                g_chw = resize_image_np(g_chw, args.image_size, args.image_size)
-            if s_chw.shape[1] != args.image_size or s_chw.shape[2] != args.image_size:
-                s_chw = resize_image_np(s_chw, args.image_size, args.image_size)
+        # 如需视频引用，准备输出视频副本相对路径
+        if args.store_video_refs:
+            import shutil
+            ensure_dir(os.path.join(output_root, "videos"))
+            ep_name = os.path.basename(os.path.normpath(ep_dir))
+            side_ext = os.path.splitext(v_side)[1]
+            grip_ext = os.path.splitext(v_gripper)[1]
+            side_dst = os.path.join(output_root, "videos", f"{ep_name}_side{side_ext}")
+            grip_dst = os.path.join(output_root, "videos", f"{ep_name}_gripper{grip_ext}")
+            if not os.path.exists(side_dst):
+                shutil.copy2(v_side, side_dst)
+            if not os.path.exists(grip_dst):
+                shutil.copy2(v_gripper, grip_dst)
+            side_rel = os.path.relpath(side_dst, output_root).replace("\\", "/")
+            grip_rel = os.path.relpath(grip_dst, output_root).replace("\\", "/")
 
-            state_t = pos_aligned[:, i].astype(np.float32)
-            action_t1 = pos_aligned[:, i + 1].astype(np.float32)
+        # 写入帧：状态用 t，动作用 t+1（支持按 stride 下采样）
+        last_index = num_frames - 1
+        idx = 0
+        while idx < last_index:
+            state_t = pos_aligned[:, idx].astype(np.float32)
+            action_t1 = pos_aligned[:, idx + 1].astype(np.float32)
 
-            frame = {
-                # 参考 conver_example.py 的键名：top_image/wrist_image
-                # 这里将 side 视为 top，gripper 视为 wrist
-                "top_image": s_chw,
-                "wrist_image": g_chw,
-                "state": state_t,
-                "action": action_t1,
-                "prompt": 'Pull the box closer and put the block into the box.',
-            }
+            if args.store_video_refs:
+                frame = {
+                    "top_video_path": side_rel,
+                    "top_frame_idx": np.array([idx], dtype=np.int32),
+                    "wrist_video_path": grip_rel,
+                    "wrist_frame_idx": np.array([idx], dtype=np.int32),
+                    "state": state_t,
+                    "action": action_t1,    
+                }
+            else:
+                g_img = frames_gripper[idx]
+                s_img = frames_side[idx]
+                g_chw = hwc_to_chw_uint8(g_img)
+                s_chw = hwc_to_chw_uint8(s_img)
+                if g_chw.shape[1] != args.image_size or g_chw.shape[2] != args.image_size:
+                    g_chw = resize_image_np(g_chw, args.image_size, args.image_size)
+                if s_chw.shape[1] != args.image_size or s_chw.shape[2] != args.image_size:
+                    s_chw = resize_image_np(s_chw, args.image_size, args.image_size)
+                frame = {
+                    "top_image": s_chw,
+                    "wrist_image": g_chw,
+                    "state": state_t,
+                    "action": action_t1,
+                }
+            if not args.no_prompt:
+                frame["prompt"] = task_name
             if vel_aligned is not None:
-                frame["velocities"] = vel_aligned[:, i].astype(np.float32)
+                frame["velocities"] = vel_aligned[:, idx].astype(np.float32)
             if eff_aligned is not None:
-                frame["efforts"] = eff_aligned[:, i].astype(np.float32)
+                frame["efforts"] = eff_aligned[:, idx].astype(np.float32)
             if suck_aligned is not None:
-                frame["sucker"] = np.array([int(np.rint(suck_aligned[i]))], dtype=np.int32)
+                frame["sucker"] = np.array([int(np.rint(suck_aligned[idx]))], dtype=np.int32)
 
-            dataset.add_frame(frame, task='Pull the box closer and put the block into the box.')
+            if args.no_prompt:
+                dataset.add_frame(frame)
+            else:
+                dataset.add_frame(frame, task=task_name)
+
+            idx += stride
 
         dataset.save_episode()
 
