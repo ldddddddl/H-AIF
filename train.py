@@ -15,7 +15,6 @@ from misc import InitAverager, set_seed, split_list, save_images, save_checkpoin
 import pandas as pd
 import time, os
 from datetime import datetime
-from multiTaskoptimizer import MultiTaskOptimizer
 from spikingjelly.activation_based import functional
 from scipy import stats
 import numpy as np
