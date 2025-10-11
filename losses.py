@@ -1,12 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributions as D
-from misc import VariableContainer, norm_to_rgb, AverageMeter
+from misc import VariableContainer, AverageMeter
 from torch.utils.tensorboard import SummaryWriter
-import cv2 as cv
-import numpy as np
-import scipy.stats
 
 class ComputeLosses(nn.Module):
     

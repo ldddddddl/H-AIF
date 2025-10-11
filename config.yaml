@@ -3,12 +3,12 @@ state: training
 epochs: 200
 lr: 3.0e-5
 batchsize: 8
-datasets_path: datasets/v4-past_num_5-future_num_5-batchsize_8-per_episode_batch_num_2
+datasets_path: ./datasets/jetmax_dataset_v3
 # datasets_path: datasets/v3_30fps_npz
 results_path: results/
 data_format: joints # joints/rpy
 is_init_param: False
-is_resume: True
+is_resume: False
 checkpoint_path: .\results\25-05-28-16-10-42--mark --results\check_point\model_25-05-28-16-10-42.pth.tar
 past_img_num: 5
 future_img_num: 5
@@ -16,9 +16,12 @@ cropWidth: 112
 cropHeight: 112
 z_dim: 128
 z_attention: true 
-random_seed: 3401678761  # -1 为随机3401678761
+random_seed: 42  # -1 为随机3401678761
 valid_datas_scale: 0.1
 per_image_with_signal_num: 20 
+cuda_visible_devices: 7
+horizon: 10
+num_workers: 4
 max_history: 1 # 只有2能用，2以上没改好
 save_rate: 1.0
 images_save_rate: 0.2
@@ -69,13 +72,6 @@ snn:
         num_blocks: 4   # num_layers
         embedding_dim: 70    # layer_norm_in_size, 
         slstm_at: [] #[1] # for [] it also works, so if no sLSTM is in the stack
-        conv_kernel: 5
-        conv_stride: 2
-        conv_padding: 1
-        conv_dilation: 1
-        conv_bias: True 
-        conv_dim: 1d
-        past_img_num: 5
 
 model:  # visual model
     mlstm_block:
@@ -97,13 +93,6 @@ model:  # visual model
     num_blocks: 4  # num_layers
     embedding_dim: 60    # layer_norm_in_size, 
     slstm_at: [] #[1] # for [] it also works, so if no sLSTM is in the stack
-    conv_kernel: 5
-    conv_stride: 3
-    conv_padding: 1
-    conv_dilation: 1
-    conv_bias: True 
-    conv_dim: 3d
-    past_img_num: 5
 
 act_model_dnc: 
     mlstm_block:
@@ -115,13 +104,6 @@ act_model_dnc:
     num_blocks: 2   # num_layers
     embedding_dim: 60    # layer_norm_in_size, 
     slstm_at: [] #[1] # for [] it also works, so if no sLSTM is in the stack
-    conv_kernel: 5
-    conv_stride: 2
-    conv_padding: 1
-    conv_dilation: 1
-    conv_bias: True 
-    conv_dim: 1d
-    past_img_num: 5 
 
 act_model_enc: 
     mlstm_block:
@@ -133,10 +115,3 @@ act_model_enc:
     num_blocks: 4  # num_layers
     embedding_dim: 60    # layer_norm_in_size, 
     slstm_at: [] #[1] # for [] it also works, so if no sLSTM is in the stack
-    conv_kernel: 5
-    conv_stride: 3
-    conv_padding: 1
-    conv_dilation: 1
-    conv_bias: True
-    conv_dim: 1d
-    past_img_num: 5

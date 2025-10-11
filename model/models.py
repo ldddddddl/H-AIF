@@ -4,19 +4,16 @@ import torch
 # from model_utils import CausalConv1D
 import sys
 # sys.path.append(r"/home/ubuntu/Desktop/action_generation/model")
-from .model_utils import CausalConv2D, conv3d_lerelu_maxpl, gaussian_parameters, sample_gaussian, conv3d, crop_like, downsampling, repeat_like, DiffDecoder, soft_pool2d, soft_pool3d
+from .model_utils import CausalConv2D, conv3d_lerelu_maxpl, gaussian_parameters, sample_gaussian, conv3d, repeat_like, DiffDecoder, soft_pool2d, soft_pool3d
 from .decoders import ActGenerate, SuckerAct, ImagesGenerate, XLstmStack
 from .convlstm import ConvLSTM
 from .critic import Critic
 from misc import VariableContainer
 sys.path.append("..")
-from xlstm import xLSTMBlockStack, xLSTMBlockStackConfig
 
 from denoising_diffusion_pytorch import Unet1D, GaussianDiffusion1D
 from denoising_diffusion_pytorch import Unet, GaussianDiffusion
-from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
-from model.snn import CSNN, ActionSpikeEncode, SNNActDecoder, RGB2Spike, DownConvSNN
-import time
+from model.snn import CSNN, SNNActDecoder, DownConvSNN
 from script.latenz_visualize import visualize_fn
 
 torch_dtype_map: dict[str, torch.dtype] = {

@@ -1,9 +1,8 @@
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributions as D
 import torch
 from torch.distributions import Normal
-from torch.nn.modules.utils import _triple, _pair, _single
+from torch.nn.modules.utils import _triple, _pair
 
 
 class DiffDecoder(nn.Module):

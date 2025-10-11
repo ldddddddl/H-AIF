@@ -1,4 +1,3 @@
-import numpy
 import torch
 # from box import Box 
 from collections import OrderedDict
@@ -6,11 +5,10 @@ from collections import OrderedDict
 import random
 import os
 import numpy as np
-import torch
 from torch.autograd import Variable
 from math import exp
 from PIL import Image
-import random, shutil
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from torchmetrics import Precision, Recall, F1Score
 from torchmetrics.image import StructuralSimilarityIndexMeasure as SSIM
@@ -255,28 +253,7 @@ def process_image(img:torch.Tensor, H, W):
     return Image.fromarray(np.uint8(norm_to_rgb(img.cpu()))).resize((W, H))
 
 def save_images(best_results, batch: int=0, shape: str = 'w_channel', save_path: str = r'/results', epc: int = 0):
-    if shape == 's_channel':
-        S, C, H, W = pred_frames.shape
-        pred_frames = pred_frames[0]
-        labels_frames = labels_frames[0]
-        # 使用多线程来并行处理图片
-        with ThreadPoolExecutor() as executor:
-            pred_results = list(executor.map(process_image, pred_frames, [H] * S, [W] * S))
-            label_results = list(executor.map(process_image, labels_frames, [H] * S, [W] * S))
-
-    elif shape == 'c_channel':
-        B, S, C, H, W = pred_frames.shape
-        pred_gripper_frames = pred_frames[0, :, :C//2, :, :]
-        pred_side_frames = pred_frames[0, :, C//2:, :, : ]
-        labels_gripper_frames = labels_frames[0, :, :C//2, :, :]
-        labels_side_frames = labels_frames[0, :, C//2:, :, : ]
-        with ThreadPoolExecutor() as executor:
-            pred_gripper_results = list(executor.map(process_image, pred_gripper_frames, [H] * S, [W] * S))
-            pred_side_results = list(executor.map(process_image, pred_side_frames, [H] * S, [W] * S))
-            
-            label_gripper_results = list(executor.map(process_image, labels_gripper_frames, [H] * S, [W] * S))
-            label_side_results = list(executor.map(process_image, labels_side_frames, [H] * S, [W] * S))
-    elif shape == 'w_channel':
+    if shape == 'w_channel':
         
         B, S, C, H, W  = best_results.side_frame_labels.shape
         
@@ -307,18 +284,7 @@ def save_images(best_results, batch: int=0, shape: str = 'w_channel', save_path:
     # 创建一个新的画布
     new_image = Image.new('RGB', (total_width, total_height))
 
-    if shape == 's_channel':
-        # 将第一行和第二行图片粘贴到画布
-        x_offset = 0
-        for img in pred_results:
-            new_image.paste(img, (x_offset, 0))
-            x_offset += W
-
-        x_offset = 0
-        for img in label_results:
-            new_image.paste(img, (x_offset, H))
-            x_offset += W
-    elif shape == 'c_channel' or shape == 'w_channel':
+    if shape == 'c_channel' or shape == 'w_channel':
         x_offset = 0
         for img in zip(pred_gripper_results, pred_side_results):
             new_image.paste(img[0], (x_offset, 0))
