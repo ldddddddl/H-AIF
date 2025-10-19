@@ -9,7 +9,6 @@ from tqdm import tqdm
 import openpyxl
 
 try:
-    import decord
     from decord import VideoReader
     DECORD_AVAILABLE = True
 except Exception:
@@ -241,7 +240,7 @@ def main():
     # 延迟导入以避免环境缺失时报错
     try:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    except Exception as e:
+    except Exception:
         print("请先安装并可导入 lerobot 库: pip install lerobot")
         raise
 
@@ -287,12 +286,12 @@ def main():
             },
             "state": {
                 "dtype": "float32",
-                "shape": (num_joints,),
+                "shape": (num_joints + (1 if has_suck else 0),),
                 "names": ["state"],
             },
             "action": {
                 "dtype": "float32",
-                "shape": (num_joints,),
+                "shape": (num_joints + (1 if has_suck else 0),),
                 "names": ["action"],
             },
         }
@@ -310,12 +309,12 @@ def main():
             },
             "state": {
                 "dtype": "float32",
-                "shape": (num_joints,),
+                "shape": (num_joints + (1 if has_suck else 0),),
                 "names": ["state"],
             },
             "action": {
                 "dtype": "float32",
-                "shape": (num_joints,),
+                "shape": (num_joints + (1 if has_suck else 0),),
                 "names": ["action"],
             },
         }
@@ -342,6 +341,11 @@ def main():
             "dtype": "int32",
             "shape": (1,),
             "names": ["sucker"],
+        }
+        features["sucker_action"] = {
+            "dtype": "int32",
+            "shape": (1,),
+            "names": ["sucker_action"],
         }
 
     dataset = LeRobotDataset.create(
@@ -445,6 +449,19 @@ def main():
             state_t = pos_aligned[:, idx].astype(np.float32)
             action_t1 = pos_aligned[:, idx + 1].astype(np.float32)
 
+            current_sucker_int: Optional[int] = None
+            next_sucker_int: Optional[int] = None
+            if suck_aligned is not None:
+                current_sucker_int = int(np.rint(suck_aligned[idx]))
+                next_sucker_int = int(np.rint(suck_aligned[idx + 1]))
+                # 将 sucker 合并到 state 与 action 的最后一维
+                state_t = np.concatenate(
+                    [state_t, np.array([float(current_sucker_int)], dtype=np.float32)], axis=0
+                )
+                action_t1 = np.concatenate(
+                    [action_t1, np.array([float(next_sucker_int)], dtype=np.float32)], axis=0
+                )
+
             if args.store_video_refs:
                 frame = {
                     "top_video_path": side_rel,
@@ -452,7 +469,7 @@ def main():
                     "wrist_video_path": grip_rel,
                     "wrist_frame_idx": np.array([idx], dtype=np.int32),
                     "state": state_t,
-                    "action": action_t1,    
+                    "action": action_t1,
                 }
             else:
                 g_img = frames_gripper[idx]
@@ -469,6 +486,7 @@ def main():
                     "state": state_t,
                     "action": action_t1,
                 }
+
             if not args.no_prompt:
                 frame["prompt"] = task_name
             if vel_aligned is not None:
@@ -476,7 +494,8 @@ def main():
             if eff_aligned is not None:
                 frame["efforts"] = eff_aligned[:, idx].astype(np.float32)
             if suck_aligned is not None:
-                frame["sucker"] = np.array([int(np.rint(suck_aligned[idx]))], dtype=np.int32)
+                frame["sucker"] = np.array([current_sucker_int], dtype=np.int32)
+                frame["sucker_action"] = np.array([next_sucker_int], dtype=np.int32)
 
             if args.no_prompt:
                 dataset.add_frame(frame)

@@ -36,12 +36,12 @@ class Critic(nn.Module):
         self.q = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.k = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.v = nn.Linear(hidden_dim, hidden_dim, bias=True)
-        self.weight_fc = nn.Linear(28, out_channels)
-        self.bias_fc = nn.Linear(8, out_channels)
+        self.weight_fc = nn.Linear(216, out_channels)
+        self.bias_fc = nn.Linear(16, out_channels)
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.flatten = nn.Flatten(start_dim=2)
-        self.batch_norm1 = nn.BatchNorm1d(20)
+        self.batch_norm1 = nn.BatchNorm1d(config.horizon)
 
     def forward(self, x):
         if self.config.olny_action_generate:
@@ -59,36 +59,29 @@ class Critic(nn.Module):
             x = torch.cat([actions, sucker, grip_feat, side_feat], dim=-1)
         x = self.fc1(x)
         x = self.batch_norm1(x)
-        z1, z2 = torch.split(x, x.size(1) // 2, dim=1)
-        batchsize = z1.size(0)
+        batchsize = x.size(0)
         q = (
-            self.q(z1)
-            .view(batchsize, -1, self.heads_dim, self.config.critic.num_heads)
+            self.q(x)
+            .view(batchsize, -1, self.config.critic.num_heads, self.heads_dim)
             .transpose(1, 2)
         )
         k = (
-            self.k(z1)
-            .view(batchsize, -1, self.heads_dim, self.config.critic.num_heads)
+            self.k(x)
+            .view(batchsize, -1, self.config.critic.num_heads, self.heads_dim)
             .transpose(1, 2)
         )
-        ####
         v = (
-            self.v(z2)
-            .view(batchsize, -1, self.heads_dim, self.config.critic.num_heads)
+            self.v(x)
+            .view(batchsize, -1, self.config.critic.num_heads, self.heads_dim)
             .transpose(1, 2)
         )
 
-        qk = torch.matmul(q, k.transpose(-2, -1))
+        qk = torch.matmul(q, k.transpose(2, 3))
         scores = qk / math.sqrt(self.heads_dim)
 
         attn_w = self.softmax(scores)
-        attn_w = self.dropout(attn_w)
-
-        attnw_v = torch.matmul(attn_w, v)
-
-        qk = qk.view(batchsize, self.config.per_image_with_signal_num, -1)
-        attnw_v = attnw_v.view(batchsize, self.config.per_image_with_signal_num, -1)
-        dp_out = torch.cat([qk, attnw_v], dim=-1)
+        attnw_v = torch.matmul(attn_w, v).transpose(1, 2).reshape(batchsize, self.config.horizon, -1)
+        dp_out = torch.cat([qk.transpose(1, 2).reshape(batchsize, self.config.horizon, -1), attnw_v], dim=-1)
         weights = self.weight_fc(dp_out)
         bias = self.bias_fc(attnw_v)
 

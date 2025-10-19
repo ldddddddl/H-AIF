@@ -1,5 +1,6 @@
 import torch.nn as nn
 import torch
+import numpy as np
 from .model_utils import (
     deconv,
     predict_flow,
@@ -232,14 +233,10 @@ class ActGenerate(nn.Module):
     ):
         super().__init__()
         self.xlstm_cfg = xlstm_cfg
-
+        self.modalities_seq_dim = xlstm_cfg.enc_out_dim * 2 + xlstm_cfg.act_model_enc.embedding_dim
         self.z_dim = z_dim
         self.device = device
         # self.linear1 = nn.Linear(xlstm_cfg.model.embedding_dim * 2, z_dim, bias=True, device=device)
-        ratio = (
-            xlstm_cfg.future_img_num * xlstm_cfg.past_img_num * 2
-            + xlstm_cfg.per_image_with_signal_num
-        ) / xlstm_cfg.per_image_with_signal_num
         self.linear1 = nn.Linear(input_dim, z_dim, bias=True, device=device)
         # self.linear2 = nn.Linear(z_dim, z_dim//2, bias=True, device=device)
         self.linear3 = nn.Linear(z_dim, z_dim // 2, bias=True, device=device)
@@ -249,12 +246,12 @@ class ActGenerate(nn.Module):
             if xlstm_cfg.act_encoder == "xlstm":
                 self.linear6 = nn.Linear(504, 3, bias=True, device=device)
             elif xlstm_cfg.act_encoder == "transformerxlstm":
-                self.linear6 = nn.Linear(672, 3, bias=True, device=device)
+                self.linear6 = nn.Linear(self.modalities_seq_dim, 3, bias=True, device=device)
         else:  # == joints
             # if xlstm_cfg.act_encoder == 'xlstm':
             self.linear6 = nn.Linear(
-                1128 * 20 // xlstm_cfg.per_image_with_signal_num,
-                9,
+                self.modalities_seq_dim,
+                xlstm_cfg.action_dim,
                 bias=True,
                 device=device,
             )
@@ -269,8 +266,9 @@ class ActGenerate(nn.Module):
         self.tanh_ = nn.Tanh()
         self.softplus = nn.Softplus()
         self.act_xlstm_layers = XLstmStack(self.xlstm_cfg.act_model_dnc, device=device)
-        self.norm_ = nn.BatchNorm1d(xlstm_cfg.act_model_dnc.embedding_dim)
+        self.norm_ = nn.BatchNorm1d(xlstm_cfg.act_model_dnc.context_length)
         self.flatten = nn.Flatten(start_dim=2)
+        self.conv1d = nn.Conv1d(xlstm_cfg.act_model_dnc.context_length, xlstm_cfg.horizon, kernel_size=1, padding=0)
 
     def forward(self, inp: torch.Tensor):
         """
@@ -279,13 +277,6 @@ class ActGenerate(nn.Module):
 
         """
 
-        inp = inp.reshape(
-            self.xlstm_cfg.batchsize,
-            self.xlstm_cfg.act_model_dnc.embedding_dim,
-            -1,
-            1,
-            1,
-        )
         xlstm_out = self.act_xlstm_layers.xlstm(inp)
         xlstm_out = self.flatten(xlstm_out)
         xlstm_out = self.norm_(xlstm_out)
@@ -294,12 +285,9 @@ class ActGenerate(nn.Module):
         # x = self.norm_(x)
         # x = self.dropout(x)
         # output, (h_n, c_n) = self.lstm(x)
-        x = xlstm_out.reshape(
-            self.xlstm_cfg.batchsize, self.xlstm_cfg.per_image_with_signal_num, -1
-        )
         # x = self.linear4(x)
-        action = (self.tanh_(self.linear6(x))) * 3.0
-        action = action.clamp(-2.5, 2.5)
+        x = self.conv1d(xlstm_out)
+        action = self.tanh_(self.linear6(x))
         # action = action.clamp(-20.0, 240.0)
         # x = self.transformer_decoder(tgt, x)
         # mean = self.tanh_(self.mean(x)) * 2
@@ -319,29 +307,32 @@ class SuckerAct(nn.Module):
     def __init__(self, z_dim=128, device="cpu", xlstm_cfg=None) -> None:
         super().__init__()
         self.xlstm_cfg = xlstm_cfg
-        in_channels = xlstm_cfg.act_model_dnc.embedding_dim * xlstm_cfg.z_dim
-        self.linear1 = nn.Linear(in_channels, z_dim, bias=True, device=device)
-        self.linear2 = nn.Linear(
-            z_dim, self.xlstm_cfg.per_image_with_signal_num, bias=True, device=device
+
+        self.linear1 = nn.Linear(z_dim, z_dim, bias=True, device=device)
+        self.out = nn.Linear(
+            z_dim, 2, bias=True, device=device
         )
-        self.norm = nn.BatchNorm1d(2)
+        self.norm = nn.BatchNorm1d(xlstm_cfg.horizon)
         self.dropout = nn.Dropout(0.2)
-        self.softmax = nn.Softmax(1)
         self.relu_ = nn.ReLU()
+        self.conv1d = nn.Conv1d(xlstm_cfg.act_model_dnc.context_length, xlstm_cfg.horizon, kernel_size=1, padding=0)
 
     def forward(self, x):
-        x = x.view(self.xlstm_cfg.batchsize, 2, -1)
+
+        x = self.conv1d(x)
         x = self.linear1(x)
         x = self.norm(x)
         x = self.relu_(x)
         x = self.dropout(x)
-        x = self.linear2(x)
-        x = self.softmax(x).transpose(1, -1)
+        x = self.out(x)
         return x
 
 
 class XLstmStack:
-    def __init__(self, xlstm_cfg, device) -> None:
+    def __init__(self, xlstm_cfg, device, shape:list | None=None) -> None:
+        if shape is not None:
+            xlstm_cfg.embedding_dim = np.prod(shape).item()
+        
         self.xlstm_layer_config = from_dict(
             data_class=xLSTMBlockStackConfig,
             data=OmegaConf.to_container(xlstm_cfg),

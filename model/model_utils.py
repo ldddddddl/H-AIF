@@ -150,8 +150,7 @@ def sample_gaussian(m, v, device, training_phase=None, z_attention=False, SelfAt
 
     if z_attention and SelfAttentions is not None:
         #### add self-attentions to mu, var
-        z_ = reparameterize(m, v)
-        att_z = SelfAttentions(z_, v=None)
+        att_z = SelfAttentions(z)
         z_mix = torch.add(att_z, z)
     else:
         z_mix = z

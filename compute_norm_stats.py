@@ -78,7 +78,7 @@ def _parse_cli_args():
     import argparse
 
     parser = argparse.ArgumentParser(description="计算 LeRobot 数据集的归一化统计（mean/std/q01/q99）")
-    parser.add_argument("--repo-id", default="lddddl/jetmax_dataset_v3", help="HF 数据集仓库 ID")
+    parser.add_argument("--repo-id", default="lddddl/jetmax_dataset_v4", help="HF 数据集仓库 ID")
     parser.add_argument("--local-dir", default=None, help="本地数据集根目录（默认 datasets/<repo_id>）")
     parser.add_argument("--keys", default="state,action", help="要统计的键，逗号分隔，例如 state,action,velocities")
     parser.add_argument("--max-samples", type=int, default=None, help="最多使用多少条样本进行统计（默认全部）")

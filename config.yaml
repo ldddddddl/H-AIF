@@ -14,14 +14,15 @@ past_img_num: 5
 future_img_num: 5
 cropWidth: 112
 cropHeight: 112
-z_dim: 128
+z_dim: 120
 z_attention: true 
 random_seed: 42  # -1 为随机3401678761
 valid_datas_scale: 0.1
 per_image_with_signal_num: 20 
-cuda_visible_devices: 7
-horizon: 10
-num_workers: 4
+cuda_visible_devices: 0
+horizon: 50
+action_dim: 9
+num_workers: 0
 max_history: 1 # 只有2能用，2以上没改好
 save_rate: 1.0
 images_save_rate: 0.2
@@ -56,6 +57,7 @@ critic:
 transformer:
     num_layers: 6
     num_heads: 6
+    embed_dim: 120
 
 snn:
     is_use: False    
@@ -78,31 +80,31 @@ model:  # visual model
         mlstm:
             conv1d_kernel_size: 4
             qkv_proj_blocksize: 4
-            num_heads: 2
-    slstm_block: {}
-        # 暂时不需要slstm
-        # slstm:
-        #     backend: 'cuda' # {'cuda' if torch.cuda.is_available() else 'vanilla'} #! only vanilla here works
-        #     num_heads: 4
-        #     conv1d_kernel_size: 4
-        #     bias_init: powerlaw_blockdependent
-        # feedforward:
-        #     proj_factor: 1.3
-        #     act_fn: gelu
-    context_length: 60
-    num_blocks: 4  # num_layers
-    embedding_dim: 60    # layer_norm_in_size, 
-    slstm_at: [] #[1] # for [] it also works, so if no sLSTM is in the stack
+            num_heads: 4
+    slstm_block:
+        slstm:
+            backend: cuda
+            num_heads: 4
+            conv1d_kernel_size: 4
+            bias_init: powerlaw_blockdependent
+        feedforward:
+            proj_factor: 1.3
+            act_fn: gelu
+    context_length: 256   # sequence length
+    num_blocks: 2        # 
+    embedding_dim: 120    # embedding dimension
+    dropout: 0.2
+    slstm_at: [1]
 
 act_model_dnc: 
     mlstm_block:
         mlstm:
             conv1d_kernel_size: 2
             qkv_proj_blocksize: 2
-            num_heads: 3
-    context_length: 60
+            num_heads: 4
+    context_length: 120
     num_blocks: 2   # num_layers
-    embedding_dim: 60    # layer_norm_in_size, 
+    embedding_dim: 360    # layer_norm_in_size, 
     slstm_at: [] #[1] # for [] it also works, so if no sLSTM is in the stack
 
 act_model_enc: 
@@ -110,8 +112,8 @@ act_model_enc:
         mlstm:
             conv1d_kernel_size: 2
             qkv_proj_blocksize: 2
-            num_heads: 3
-    context_length: 60
-    num_blocks: 4  # num_layers
-    embedding_dim: 60    # layer_norm_in_size, 
+            num_heads: 4
+    context_length: 360
+    num_blocks: 2  # num_layers
+    embedding_dim: 120    # layer_norm_in_size, 
     slstm_at: [] #[1] # for [] it also works, so if no sLSTM is in the stack

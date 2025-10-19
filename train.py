@@ -31,13 +31,13 @@ import numpy as np
 from script.metrics import calc_metrics
 from load_jetmax_dataset import load_lerobot_dataloader
 import ctypes
-
+from accelerate.utils import send_to_device
 
 def main(xlstm_cfg: DictConfig):
     seed = set_seed(xlstm_cfg.random_seed)
     xlstm_cfg.random_seed = seed
     os.environ["CUDA_VISIBLE_DEVICES"] = str(xlstm_cfg.cuda_visible_devices)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     is_use_cuda = torch.cuda.is_available()
     model = ActNet(xlstm_cfg, is_use_cuda=is_use_cuda, device=device).to(device=device)
 
@@ -77,8 +77,11 @@ def main(xlstm_cfg: DictConfig):
         train_ratio=xlstm_cfg.valid_datas_scale,
         seed=xlstm_cfg.random_seed,
         horizon=xlstm_cfg.horizon,
+        past_img_num=xlstm_cfg.past_img_num,
+        future_img_num=xlstm_cfg.future_img_num,
         normalize=True,
         norm_stats_dir=xlstm_cfg.datasets_path,
+        image_size=xlstm_cfg.cropWidth
     )
     grip_upsample_frame_pred_temp, grip_frame_labels_temp = None, None
     side_upsample_frame_pred_temp, side_frame_labels_temp = None, None
@@ -325,35 +328,31 @@ def train(
 
         # # test ##
         # from matplotlib import pyplot as plt
-        # temp = timestamp_motors_sucker[:, :, 1:-1]
-        # temp_ = torch.split(temp, 1, dim=0)
-        # tttt = torch.cat(temp_, dim=1).squeeze(0)
+        # tttt = batch['action'][0, ...]
         # for i in range(tttt.shape[1]):
         #     plt.plot(tttt[:, i])
+        #     plt.savefig(f'{i}.png')
 
-        # for g in range(gripper_frame_timestamp.shape[0]):
-        #     for s in range(gripper_frame_timestamp.shape[1]):
-        #         plt.imshow(gripper_frame_timestamp[g, s, ...].transpose(0, -1))
+        # for g in range(batch['obsetvation']['top_image'].shape[0]):
+        #     for s in range(batch['obsetvation']['wrist_image'].shape[1]):
+        #         plt.imshow(batch['obsetvation']['wrist_image'][g, s, ...].transpose(0, -1))
         #         plt.title(f'{g}_{s}')
-        #         plt.show()
-        # ########
+        #         plt.savefig(f'{g}_{s}.png')
+        ########
 
-        if timestamp_motors_sucker.size(0) < xlstm_cfg.batchsize:
+        if batch['action'].size(0) < xlstm_cfg.batchsize:
             continue
-        timestamp_motors_sucker = timestamp_motors_sucker.to(device=device)
-        act_segments = seg_buffer.add_segment(timestamp_motors_sucker)
+        
+        batch = send_to_device(batch, device)
 
         # else:
         #     act_segments = seg_buffer.add_segment(timestamp_motors_sucker, add_side='l')
 
-        gripper_frame_timestamp = gripper_frame_timestamp.to(device=device)
-        side_frame_timestamp = side_frame_timestamp.to(device=device)
-        labels = [label.to(device=device) for label in labels]
         _time = time.time()
         output = model(
-            act_segments, gripper_frame_timestamp, side_frame_timestamp, labels, phase
+            batch, phase 
         )
-        loss_results = compute_losses(output, labels, writer, epc, train_avg, phase)
+        loss_results = compute_losses(output, batch, writer, epc, train_avg, phase)
         # compute acc
         pred_sucker = [
             torch.argmax(output.sucker[:, h, :], 1)
@@ -362,7 +361,7 @@ def train(
 
         acc_sucker = sum(
             accuracy_score(
-                pred_sucker[h].cpu().data.numpy(), labels[0][:, h].cpu().data.numpy()
+                pred_sucker[h].cpu().data.numpy(), batch['sucker_action'].cpu().data.numpy()
             )
             for h in range(output.sucker.size(2))
         ) / (output.sucker.size(2))

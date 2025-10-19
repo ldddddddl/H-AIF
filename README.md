@@ -22,6 +22,7 @@ git submodule update --init --recursive
 
 ```bash
 GIT_LFS_SKIP_SMUDGE=1 uv sync
+# Options
 GIT_LFS_SKIP_SMUDGE=1 uv pip install -e .
 ```
 
